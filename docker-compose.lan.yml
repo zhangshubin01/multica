@@ -1,0 +1,108 @@
+# 本机 override（内网入口 + 运维加固）：在现有自托管栈前面加一个 Caddy（服务名 edge），
+# 让同一局域网里的其他机器能通过 http://<本机IP>/ 访问，并让 /ws 的
+# WebSocket 升级走得通（Next.js rewrite 不转发 Upgrade 握手）。
+#
+# 后端/前端仍然只绑 127.0.0.1，所以本机的 multica daemon（server_url=localhost:3100）
+# 完全不受影响；对外只多开一个 80 端口。
+#
+# 本文件也是**唯一一份未跟踪的本地覆盖**，所以除了内网入口，还承载两类"上游模板没写、
+# 但换到团队服务器就会出问题"的加固，都只影响容器运行时、不改应用行为：
+#   1. 日志轮转（x-logging）：上游三个 compose 都没有 logging 段。本机靠 OrbStack
+#      守护进程的内置默认值（json-file, max-size=20m, max-file=5）侥幸有轮转，
+#      但普通 Linux Docker 主机的 json-file 默认**不限制**，日志会一直涨到填满磁盘。
+#      这里显式声明，数值与本机现状一致（20m × 5 = 100MB/容器），换机器不会突然变行为。
+#   2. backend healthcheck：上游只有 postgres / redis 有探活，后端没有，
+#      于是进程卡死时 `docker ps` 仍显示 Up。探针用 /readyz（含 DB + 迁移检查），
+#      镜像里的 wget 是 BusyBox 版，不支持 --spider，所以直接丢弃响应体。
+#
+# 用法（三个 -f 一起用，保持源码构建的 dev 镜像）：
+#   docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f docker-compose.lan.yml up -d
+# 只停试跑的入口：
+#   docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f docker-compose.lan.yml stop edge
+# 彻底回退：stop edge + 删掉 .env 里 CORS_ALLOWED_ORIGINS / MULTICA_APP_URL 的改动。
+# 只回退本节加固：删掉下面的 x-logging / logging / healthcheck 三处即可（纯运行时配置，无副作用）。
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  # 只为了给 base 里定义的服务加 logging —— override 只能改自己声明过的服务。
+  # 这两块不含其它字段，不会覆盖 base 的镜像/卷/端口。
+  postgres:
+    logging: *default-logging
+
+  frontend:
+    logging: *default-logging
+
+  # Redis：作为项目内服务，OrbStack 里才会归到 multica 组，并且跟随项目命令起停。
+  # 仍然发布到宿主回环 127.0.0.1:6379，所以 .env 里的 REDIS_URL 继续用
+  # host.docker.internal —— 这样即使某次只用两个 -f 起栈（服务列表里没有 redis），
+  # 后端也照样连得上已经在跑的它，不会因为少了 override 而连不上。
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  edge:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./Caddyfile.lan:/etc/caddy/Caddyfile:ro
+      - edge_data:/data
+      - edge_config:/config
+    logging: *default-logging
+
+  # 有了反代之后，后端看到的对端是前端容器（实测 192.168.148.4），所以认证限流
+  # 默认会把"整个团队"算成一个 IP 共用一个桶。这里把 Docker 网段登记为可信代理，
+  # 让限流按 X-Forwarded-For 里的真实客户端 IP 计数。
+  # 2026-11-18（P0-4）：Caddyfile.lan 已把 /auth/* 直连后端，但实测发现
+  # OrbStack 的宿主端口发布会抹掉客户端源地址（探针容器无论收到 loopback 还是
+  # LAN 网卡的请求，源都是 VM 网关 192.168.215.1/192.168.148.1），Caddy 设的
+  # X-Forwarded-For 恒为网关、落在可信网段内 → 键仍是网关，"每人一份"不成立。
+  # 因此阈值维持团队的 30 / 120（全团队一桶下的务实值）；迁移到 Linux 主机
+  # （iptables 保留源地址）后把这两行改回 5 / 20 即自动按真实 IP 限流。
+  backend:
+    logging: *default-logging
+    environment:
+      RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-192.168.148.0/24}
+      RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-30}
+      RATE_LIMIT_AUTH_VERIFY: ${RATE_LIMIT_AUTH_VERIFY:-120}
+      # 邀请限流（三道闸：actor 每邀请人 / workspace 每工作区 / recipient 每收件邮箱）。
+      # 上游 `docker-compose.selfhost.yml` 漏了这三个变量（.env.example 里有文档、模板里没有），
+      # 所以默认哪怕写进 .env 也进不了容器 —— 这里补上透传，取值由 .env 决定，
+      # 留空则回落到代码默认 10 / 50 / 6（20 人一次拉完会被 actor 那道挡住）。
+      RATE_LIMIT_INVITATION_ACTOR_10M: ${RATE_LIMIT_INVITATION_ACTOR_10M:-}
+      RATE_LIMIT_INVITATION_WORKSPACE_24H: ${RATE_LIMIT_INVITATION_WORKSPACE_24H:-}
+      RATE_LIMIT_INVITATION_RECIPIENT_24H: ${RATE_LIMIT_INVITATION_RECIPIENT_24H:-}
+      # 功能开关（pkg/featureflag：FF_<FLAG_KEY> 覆盖 YAML 规则文件）。compose 默认
+      # 不透传任何 FF_*，所以要在模板里显式接一次。plugins_v1 打开后侧边栏才出现
+      # Settings → Plugins（settings-page.tsx:206），后端插件 API 也才不再 503。
+      FF_PLUGINS_V1: ${FF_PLUGINS_V1:-true}
+    healthcheck:
+      # /readyz 会检查 DB 与迁移状态（不是只回 200 的浅探针）。
+      # BusyBox wget 没有 --spider，所以丢弃响应体，只看退出码。
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  edge_data:
+  edge_config:
+  redis_data:
