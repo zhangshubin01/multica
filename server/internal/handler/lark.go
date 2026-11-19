@@ -300,16 +300,17 @@ func (h *Handler) BeginLarkInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// region is the cloud the user explicitly chose to bind against —
-	// "feishu" (mainland, accounts.feishu.cn) or "lark" (international,
-	// accounts.larksuite.com). The frontend now exposes two CTAs ("Bind
-	// to Feishu" / "Bind to Lark") so the QR is rendered against the
-	// right cloud up front rather than relying on the mid-poll
-	// tenant-brand auto-switch from a Feishu-first begin. We accept
-	// "feishu", "lark", and the empty string (for back-compat with
-	// callers that pre-date the split CTA, which RegionOrDefault inside
-	// the service maps to Feishu); any other value is a 400 — the
-	// service would normalize an unknown value to Feishu silently and
-	// that would mask a frontend regression where a typo'd region
+	// "feishu" (mainland) or "lark" (international). The device-flow
+	// begin now always starts on the Feishu host (Lark deprecated the
+	// larksuite legacy flow), and region selects which open-platform
+	// host the verification QR is rendered on — open.larksuite.com for
+	// "lark", open.feishu.cn otherwise — while the poll stream's
+	// tenant_brand signal still flips the polling host mid-session.
+	// We accept "feishu", "lark", and the empty string (for back-compat
+	// with callers that pre-date the split CTA, which RegionOrDefault
+	// inside the service maps to Feishu); any other value is a 400 —
+	// the service would normalize an unknown value to Feishu silently
+	// and that would mask a frontend regression where a typo'd region
 	// landed users on the wrong cloud without telling them.
 	regionParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("region")))
 	switch regionParam {

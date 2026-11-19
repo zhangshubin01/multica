@@ -70,24 +70,6 @@ func TestRegistrationServiceConstructorValidatesDeps(t *testing.T) {
 	}
 }
 
-// TestBotNamePreset pins the bot-name pre-fill format that rides on the
-// QR URL: "<agent> - Multica", with a blank agent name degrading to
-// plain "Multica" rather than a dangling " - Multica".
-func TestBotNamePreset(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"Ada", "Ada - Multica"},
-		{"  Ada  ", "Ada - Multica"},
-		{"产品助手", "产品助手 - Multica"},
-		{"", "Multica"},
-		{"   ", "Multica"},
-	}
-	for _, tc := range cases {
-		if got := botNamePreset(tc.in); got != tc.want {
-			t.Errorf("botNamePreset(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
 // The service's own MemoryInstallSessionStore stands in for Redis here —
 // it implements the same InstallSessionStore contract, so these tests
 // exercise the real production type rather than a bespoke fake. The

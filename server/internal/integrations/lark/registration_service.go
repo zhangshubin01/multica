@@ -424,15 +424,10 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 	// UUID, and the device_code minted against Lark would still produce
 	// credentials. The handler already loads this agent to run
 	// canManageAgent; re-checking here keeps the service self-defending.
-	//
-	// We keep the agent: its name pre-fills the bot name on Lark's
-	// PersonalAgent creation form (see botNamePreset) so the installed
-	// bot reads "<agent> - Multica" instead of "{用户姓名}的智能助手".
-	agent, err := s.authQueries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+	if _, err := s.authQueries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          p.AgentID,
 		WorkspaceID: p.WorkspaceID,
-	})
-	if err != nil {
+	}); err != nil {
 		return BeginInstallResult{}, fmt.Errorf("lark registration: agent not in workspace: %w", err)
 	}
 
@@ -443,7 +438,7 @@ func (s *RegistrationService) BeginInstall(ctx context.Context, p BeginInstallPa
 	// field) keeps getting the historical mainland-first behaviour.
 	region := RegionOrDefault(string(p.Region))
 
-	begin, err := s.client.Begin(ctx, botNamePreset(agent.Name), region)
+	begin, err := s.client.Begin(ctx, region)
 	if err != nil {
 		return BeginInstallResult{}, fmt.Errorf("lark registration: begin: %w", err)
 	}
@@ -815,21 +810,6 @@ func randomSessionID() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
-// botNamePreset builds the display name we pre-fill on Lark's
-// PersonalAgent creation form so the installed bot reads
-// "<agent> - Multica" instead of Lark's auto-generated
-// "{用户姓名}的智能助手". Lark treats this as a default the installer can
-// still edit; we never get to lock the final name. A blank agent name
-// (defensive — Agent.Name is NOT NULL in schema) degrades to plain
-// "Multica" rather than a dangling " - Multica".
-func botNamePreset(agentName string) string {
-	name := strings.TrimSpace(agentName)
-	if name == "" {
-		return "Multica"
-	}
-	return name + " - Multica"
 }
 
 // uuidString is the package-local UUID-to-string helper defined in

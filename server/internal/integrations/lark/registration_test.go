@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,8 +47,8 @@ func (f *registrationFake) stubBegin(resp map[string]any) {
 			if got := r.Form.Get("auth_method"); got != "client_secret" {
 				f.t.Errorf("begin: auth_method=%q want client_secret", got)
 			}
-			if got := r.Form.Get("request_user_info"); got != "open_id" {
-				f.t.Errorf("begin: request_user_info=%q want open_id", got)
+			if got := r.Form.Get("request_user_info"); got != "open_id tenant_brand" {
+				f.t.Errorf("begin: request_user_info=%q want %q", got, "open_id tenant_brand")
 			}
 			writeJSON(w, resp)
 		case "poll":
@@ -63,16 +62,14 @@ func (f *registrationFake) stubBegin(resp map[string]any) {
 func TestRegistrationClient_Begin_HappyPath(t *testing.T) {
 	fake := newRegistrationFake(t)
 	fake.stubBegin(map[string]any{
-		"device_code":               "dc_xyz",
-		"verification_uri_complete": "https://accounts.feishu.cn/oauth/v1/qrcode?code=abc",
-		"verification_uri":          "https://accounts.feishu.cn/oauth/v1/qrcode",
-		"user_code":                 "ABCD-EFGH",
-		"interval":                  3,
-		"expire_in":                 600,
+		"device_code": "dc_xyz",
+		"user_code":   "ABCD-EFGH",
+		"interval":    3,
+		"expire_in":   600,
 	})
 
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	res, err := c.Begin(context.Background(), "Ada - Multica", "")
+	res, err := c.Begin(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -88,92 +85,96 @@ func TestRegistrationClient_Begin_HappyPath(t *testing.T) {
 	if res.Domain != fake.URL() {
 		t.Errorf("Domain: got %q want %q", res.Domain, fake.URL())
 	}
-	// QR URL must carry the SDK telemetry params Lark expects so the
-	// scanner UI surfaces the polished prompt on the user's phone.
+	// The QR URL must be the current official /page/cli flow on the
+	// Feishu open host (empty region → Feishu default): Lark deprecated
+	// the old verification_uri_complete (/page/launcher) target, so the
+	// client builds this itself from the returned user_code.
 	u, err := url.Parse(res.QRCodeURL)
 	if err != nil {
 		t.Fatalf("QRCodeURL: %v", err)
 	}
+	if u.Scheme != "https" || u.Host != "open.feishu.cn" || u.Path != "/page/cli" {
+		t.Errorf("qr URL: got %q want https://open.feishu.cn/page/cli", res.QRCodeURL)
+	}
 	q := u.Query()
-	if q.Get("from") != "sdk" {
-		t.Errorf("qr from=%q want sdk", q.Get("from"))
+	if q.Get("user_code") != "ABCD-EFGH" {
+		t.Errorf("qr user_code=%q want %q", q.Get("user_code"), "ABCD-EFGH")
 	}
-	if q.Get("tp") != "sdk" {
-		t.Errorf("qr tp=%q want sdk", q.Get("tp"))
-	}
-	if !strings.HasPrefix(q.Get("source"), "go-sdk/multica") {
-		t.Errorf("qr source=%q want go-sdk/multica", q.Get("source"))
-	}
-	// The name preset pre-fills the Lark PersonalAgent creation form so
-	// the bot defaults to "<agent> - Multica" rather than the
-	// auto-generated "{用户姓名}的智能助手".
-	if q.Get("name") != "Ada - Multica" {
-		t.Errorf("qr name=%q want %q", q.Get("name"), "Ada - Multica")
+	if q.Get("from") != "cli" {
+		t.Errorf("qr from=%q want cli", q.Get("from"))
 	}
 }
 
-// TestRegistrationClient_Begin_OmitsNameWhenPresetEmpty pins that an
-// empty preset leaves the `name` param off the QR URL entirely (rather
-// than emitting name= and pre-filling a blank), so the begin path is
-// unchanged when no preset is supplied.
-func TestRegistrationClient_Begin_OmitsNameWhenPresetEmpty(t *testing.T) {
+// TestRegistrationClient_Begin_MissingUserCodeIsInvalidResponse pins the
+// new required field: without user_code the client cannot build the
+// /page/cli URL, so Begin must fail as a typed protocol error instead
+// of emitting a URL-less QR.
+func TestRegistrationClient_Begin_MissingUserCodeIsInvalidResponse(t *testing.T) {
 	fake := newRegistrationFake(t)
 	fake.stubBegin(map[string]any{
-		"device_code":               "dc_noname",
-		"verification_uri_complete": "https://accounts.feishu.cn/oauth/v1/qrcode?code=abc",
+		"device_code": "dc_nousercode",
 	})
 
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	res, err := c.Begin(context.Background(), "", "")
-	if err != nil {
-		t.Fatalf("Begin: %v", err)
+	_, err := c.Begin(context.Background(), "")
+	if err == nil {
+		t.Fatal("want error on begin response without user_code")
 	}
-	u, err := url.Parse(res.QRCodeURL)
-	if err != nil {
-		t.Fatalf("QRCodeURL: %v", err)
-	}
-	if _, ok := u.Query()["name"]; ok {
-		t.Errorf("qr URL should omit name when preset empty, got %q", res.QRCodeURL)
+	var re *RegistrationError
+	if !errorsAs(err, &re) || re.Code != "invalid_response" {
+		t.Errorf("want invalid_response RegistrationError, got %v", err)
 	}
 }
 
-// TestRegistrationClient_Begin_RegionLarkBeginsOnLarksuite pins the
-// new explicit-region routing: passing region=lark to Begin must POST
-// the begin form against the configured LarkDomain (international) host
-// rather than the Feishu default. This is the routing optimization the
-// split "Bind to Feishu / Bind to Lark" UI relies on — without it, a
-// Lark user would still hit accounts.feishu.cn first and only flip to
-// larksuite mid-poll via the tenant-brand auto-switch.
-func TestRegistrationClient_Begin_RegionLarkBeginsOnLarksuite(t *testing.T) {
+// TestRegistrationClient_Begin_RegionLarkBeginsOnFeishu pins the
+// post-launcher-deprecation routing: region=lark does NOT switch the
+// begin endpoint — accounts.larksuite.com's begin still serves the
+// legacy flow Lark international now rejects, so every begin (Lark
+// included) must POST to the Feishu host and rely on the poll stream's
+// tenant_brand="lark" switch (Poll) to flip hosts mid-session. What
+// region=lark DOES change is the open host the verification URL is
+// built on: open.larksuite.com/page/cli, so the user scans the cloud
+// they will authorize from.
+func TestRegistrationClient_Begin_RegionLarkBeginsOnFeishu(t *testing.T) {
 	feishuFake := newRegistrationFake(t)
-	feishuFake.mux.HandleFunc(registrationEndpoint, func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("region=lark should NOT POST begin to the Feishu host (%s)", feishuFake.URL())
-		w.WriteHeader(http.StatusInternalServerError)
+	feishuFake.stubBegin(map[string]any{
+		"device_code": "dc_lark",
+		"user_code":   "ABCD-EFGH",
 	})
 
 	larkFake := newRegistrationFake(t)
-	larkFake.stubBegin(map[string]any{
-		"device_code":               "dc_lark",
-		"verification_uri_complete": "https://accounts.larksuite.com/oauth/v1/qrcode?code=abc",
+	larkFake.mux.HandleFunc(registrationEndpoint, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("begin must NOT POST to the Lark host (%s) — the official flow always starts on Feishu", larkFake.URL())
+		w.WriteHeader(http.StatusInternalServerError)
 	})
 
 	c := NewRegistrationClient(RegistrationConfig{
 		Domain:     feishuFake.URL(),
 		LarkDomain: larkFake.URL(),
 	})
-	res, err := c.Begin(context.Background(), "", RegionLark)
+	res, err := c.Begin(context.Background(), RegionLark)
 	if err != nil {
 		t.Fatalf("Begin(region=lark): %v", err)
 	}
-	if res.Domain != larkFake.URL() {
-		t.Errorf("BeginResult.Domain: got %q want %q (LarkDomain) — subsequent polls must hit the larksuite host directly",
-			res.Domain, larkFake.URL())
+	if res.Domain != feishuFake.URL() {
+		t.Errorf("BeginResult.Domain: got %q want %q (Feishu) — subsequent polls start on Feishu and switch via tenant_brand",
+			res.Domain, feishuFake.URL())
 	}
-	if got := larkFake.beginN.Load(); got != 1 {
-		t.Errorf("Lark begin POSTs: got %d want 1", got)
+	if got := feishuFake.beginN.Load(); got != 1 {
+		t.Errorf("Feishu begin POSTs: got %d want 1", got)
 	}
-	if got := feishuFake.beginN.Load(); got != 0 {
-		t.Errorf("Feishu begin POSTs: got %d want 0 (region=lark must not touch Feishu host)", got)
+	if got := larkFake.beginN.Load(); got != 0 {
+		t.Errorf("Lark begin POSTs: got %d want 0 (begin must never hit the Lark host)", got)
+	}
+	u, err := url.Parse(res.QRCodeURL)
+	if err != nil {
+		t.Fatalf("QRCodeURL: %v", err)
+	}
+	if u.Scheme != "https" || u.Host != "open.larksuite.com" || u.Path != "/page/cli" {
+		t.Errorf("qr URL: got %q want https://open.larksuite.com/page/cli", res.QRCodeURL)
+	}
+	if u.Query().Get("from") != "cli" {
+		t.Errorf("qr from=%q want cli", u.Query().Get("from"))
 	}
 }
 
@@ -185,8 +186,8 @@ func TestRegistrationClient_Begin_RegionLarkBeginsOnLarksuite(t *testing.T) {
 func TestRegistrationClient_Begin_RegionFeishuBeginsOnFeishu(t *testing.T) {
 	feishuFake := newRegistrationFake(t)
 	feishuFake.stubBegin(map[string]any{
-		"device_code":               "dc_feishu",
-		"verification_uri_complete": "https://accounts.feishu.cn/oauth/v1/qrcode?code=abc",
+		"device_code": "dc_feishu",
+		"user_code":   "ABCD-EFGH",
 	})
 
 	larkFake := newRegistrationFake(t)
@@ -199,7 +200,7 @@ func TestRegistrationClient_Begin_RegionFeishuBeginsOnFeishu(t *testing.T) {
 		Domain:     feishuFake.URL(),
 		LarkDomain: larkFake.URL(),
 	})
-	res, err := c.Begin(context.Background(), "", RegionFeishu)
+	res, err := c.Begin(context.Background(), RegionFeishu)
 	if err != nil {
 		t.Fatalf("Begin(region=feishu): %v", err)
 	}
@@ -212,6 +213,13 @@ func TestRegistrationClient_Begin_RegionFeishuBeginsOnFeishu(t *testing.T) {
 	if got := larkFake.beginN.Load(); got != 0 {
 		t.Errorf("Lark begin POSTs: got %d want 0", got)
 	}
+	u, err := url.Parse(res.QRCodeURL)
+	if err != nil {
+		t.Fatalf("QRCodeURL: %v", err)
+	}
+	if u.Host != "open.feishu.cn" || u.Path != "/page/cli" {
+		t.Errorf("qr URL: got %q want https://open.feishu.cn/page/cli", res.QRCodeURL)
+	}
 }
 
 func TestRegistrationClient_Begin_HonorsExpiresInWireField(t *testing.T) {
@@ -223,15 +231,14 @@ func TestRegistrationClient_Begin_HonorsExpiresInWireField(t *testing.T) {
 	// collapsing a 1-hour QR to the 10-minute fallback.
 	fake := newRegistrationFake(t)
 	fake.stubBegin(map[string]any{
-		"device_code":               "dc_expires_in",
-		"verification_uri_complete": "https://open.feishu.cn/page/launcher?user_code=ABCD-EFGH",
-		"user_code":                 "ABCD-EFGH",
-		"interval":                  5,
-		"expires_in":                3600,
+		"device_code": "dc_expires_in",
+		"user_code":   "ABCD-EFGH",
+		"interval":    5,
+		"expires_in":  3600,
 	})
 
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	res, err := c.Begin(context.Background(), "", "")
+	res, err := c.Begin(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -248,12 +255,12 @@ func TestRegistrationClient_Begin_DefaultsWhenServerOmitsTimers(t *testing.T) {
 	// very first poll.
 	fake := newRegistrationFake(t)
 	fake.stubBegin(map[string]any{
-		"device_code":               "dc_default",
-		"verification_uri_complete": "https://accounts.feishu.cn/oauth/v1/qrcode?code=abc",
+		"device_code": "dc_default",
+		"user_code":   "ABCD-EFGH",
 	})
 
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	res, err := c.Begin(context.Background(), "", "")
+	res, err := c.Begin(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -272,7 +279,7 @@ func TestRegistrationClient_Begin_LarkError(t *testing.T) {
 		"error_description": "missing archetype",
 	})
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	_, err := c.Begin(context.Background(), "", "")
+	_, err := c.Begin(context.Background(), "")
 	if err == nil {
 		t.Fatal("expected error from Lark error response")
 	}
@@ -292,7 +299,7 @@ func TestRegistrationClient_Begin_HTTPNon2xx(t *testing.T) {
 		_, _ = w.Write([]byte("server boom"))
 	})
 	c := NewRegistrationClient(RegistrationConfig{Domain: fake.URL()})
-	_, err := c.Begin(context.Background(), "", "")
+	_, err := c.Begin(context.Background(), "")
 	if err == nil {
 		t.Fatal("want error on 500")
 	}

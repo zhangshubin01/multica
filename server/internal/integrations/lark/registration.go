@@ -17,13 +17,19 @@ import (
 // (mainland) / accounts.larksuite.com (international). The protocol
 // has only two phases:
 //
-//  1. begin — POST <domain>/oauth/v1/app/registration with
-//     action=begin and (archetype=PersonalAgent / auth_method=client_secret
-//     / request_user_info=open_id). Lark returns a device_code, a
-//     verification_uri_complete (the QR target), a polling interval,
-//     and an expiry. Multica renders the QR, the user scans it in the
-//     Lark app, walks the "create a PersonalAgent for this account"
-//     flow, and authorizes.
+//  1. begin — ALWAYS POST accounts.feishu.cn/oauth/v1/app/registration
+//     with action=begin and (archetype=PersonalAgent /
+//     auth_method=client_secret / request_user_info="open_id
+//     tenant_brand"). Lark returns a device_code, a user_code, a
+//     polling interval, and an expiry. Lark deprecated the
+//     verification_uri_complete (/page/launcher) flow — the
+//     international cloud rejects those links as expired (code 10074)
+//     immediately — so Multica builds the verification URL itself on
+//     the requested region's open-platform host:
+//     {open host}/page/cli?user_code=…&from=cli, exactly like the
+//     official larksuite/cli. The user scans it in the Lark app, walks
+//     the "create a PersonalAgent for this account" flow, and
+//     authorizes.
 //
 //  2. poll — POST the same URL with action=poll and the device_code.
 //     The server replies with one of:
@@ -110,11 +116,6 @@ type RegistrationConfig struct {
 	// headroom for cross-region paths.
 	HTTPClient *http.Client
 
-	// Source labels the QR-code URL's `source` query param so Lark's
-	// telemetry can attribute installs back to Multica. Empty defaults
-	// to "multica".
-	Source string
-
 	// Now is overridable for deterministic expiry-bound tests.
 	Now func() time.Time
 }
@@ -128,9 +129,6 @@ func (c RegistrationConfig) withDefaults() RegistrationConfig {
 	}
 	if c.HTTPClient == nil {
 		c.HTTPClient = &http.Client{Timeout: 30 * time.Second}
-	}
-	if c.Source == "" {
-		c.Source = "multica"
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -155,8 +153,9 @@ func NewRegistrationClient(cfg RegistrationConfig) *RegistrationClient {
 // BeginResult is what Begin returns to RegistrationService.
 type BeginResult struct {
 	DeviceCode string
-	// QRCodeURL is the verification_uri_complete with Multica's `source`
-	// telemetry params appended; render this as a QR image client-side.
+	// QRCodeURL is the verification URL Multica built on the requested
+	// region's open-platform host ({open host}/page/cli?user_code=…
+	// &from=cli); render this as a QR image client-side.
 	QRCodeURL string
 	// Domain is the polling host this session opened against. The
 	// service must pass it back to Poll so the international-tenant
@@ -231,40 +230,27 @@ func (e *RegistrationError) Error() string {
 	return fmt.Sprintf("registration: %s: %s", e.Code, e.Description)
 }
 
-// Begin opens a new device-flow session against the open-platform host
-// for the requested region. Region is normally chosen explicitly by the
-// caller (the user picked "Feishu" or "Lark" in the UI) so the QR
-// renders against the same cloud the user expects to scan from; an
-// empty value falls back to Feishu (mainland) for back-compat with
-// callers that pre-date region-aware install. Lark may STILL surface a
-// Lark-international tenant on a subsequent poll even when the begin
-// host was Feishu — the SwitchedDomain branch in RegistrationService
-// keeps that auto-detect path alive as a fallback for users who pick
-// the wrong entry, so explicit region selection is a routing
-// optimization (saves one round-trip and renders the right cloud's QR
-// up front), not a constraint on what the device flow can recover from.
+// Begin opens a new device-flow session. The begin POST ALWAYS targets
+// the Feishu host (cfg.Domain) — this mirrors the official
+// larksuite/cli: accounts.larksuite.com's begin endpoint still serves
+// the legacy flow whose verification links Lark international now
+// rejects as expired (code 10074), so even a Lark-international
+// install must start on Feishu and let the poll stream's
+// tenant_brand="lark" signal flip the polling host mid-session (see
+// Poll / SwitchedDomain).
 //
-// namePreset pre-fills the bot/app name on Lark's "create a
-// PersonalAgent" form so the installed bot defaults to e.g.
-// "<agent> - Multica" instead of Lark's auto-generated
-// "{用户姓名}的智能助手". It is a user-editable default (the user can
-// still change it on the form), and it rides on the QR URL — not the
-// begin POST body, which has no name field. Empty omits the pre-fill.
-func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, region Region) (*BeginResult, error) {
-	// Pick the begin domain off the requested region. Empty / unknown
-	// regions degrade to Feishu (mainland) — same back-compat invariant
-	// as RegionOrDefault, so callers that pre-date this signature
-	// (passing "") keep working.
+// Region therefore no longer routes the begin endpoint. It selects
+// only which open-platform host the verification URL is built against
+// — Lark users get a QR on open.larksuite.com, Feishu users on
+// open.feishu.cn, so each scans the cloud they will authorize from.
+// An empty value falls back to Feishu (mainland) for back-compat with
+// callers that pre-date region-aware install.
+func (c *RegistrationClient) Begin(ctx context.Context, region Region) (*BeginResult, error) {
 	domain := c.cfg.Domain
-	if region == RegionLark {
-		domain = c.cfg.LarkDomain
-	}
 	var resp struct {
-		DeviceCode              string `json:"device_code"`
-		VerificationURIComplete string `json:"verification_uri_complete"`
-		VerificationURI         string `json:"verification_uri"`
-		UserCode                string `json:"user_code"`
-		Interval                int    `json:"interval"`
+		DeviceCode string `json:"device_code"`
+		UserCode   string `json:"user_code"`
+		Interval   int    `json:"interval"`
 		// ExpiresIn is the RFC 8628 §3.2 field name, and the one both
 		// accounts.feishu.cn and accounts.larksuite.com actually send
 		// (currently 3600). ExpireIn is the spelling the upstream Lark
@@ -280,7 +266,7 @@ func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, regio
 		"action":            []string{"begin"},
 		"archetype":         []string{"PersonalAgent"},
 		"auth_method":       []string{"client_secret"},
-		"request_user_info": []string{"open_id"},
+		"request_user_info": []string{"open_id tenant_brand"},
 	}
 	if err := c.doForm(ctx, domain, form, &resp); err != nil {
 		return nil, err
@@ -291,12 +277,12 @@ func (c *RegistrationClient) Begin(ctx context.Context, namePreset string, regio
 	if resp.DeviceCode == "" {
 		return nil, &RegistrationError{Code: "invalid_response", Description: "device_code is empty"}
 	}
-	if resp.VerificationURIComplete == "" {
-		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is empty"}
+	if resp.UserCode == "" {
+		return nil, &RegistrationError{Code: "invalid_response", Description: "user_code is empty"}
 	}
-	qr, err := decorateQRCodeURL(resp.VerificationURIComplete, c.cfg.Source, namePreset)
+	qr, err := buildVerificationURL(region.OpenPlatformBaseURL(), resp.UserCode)
 	if err != nil {
-		return nil, &RegistrationError{Code: "invalid_response", Description: "verification_uri_complete is not a URL: " + err.Error()}
+		return nil, &RegistrationError{Code: "invalid_response", Description: "cannot build verification URL: " + err.Error()}
 	}
 	interval := registrationDefaultPollSeconds
 	if resp.Interval > 0 {
@@ -463,28 +449,22 @@ func (c *RegistrationClient) doForm(ctx context.Context, domain string, form url
 	}
 }
 
-// decorateQRCodeURL appends the SDK-style telemetry params Lark expects
-// on the QR-image URL. Without `from=sdk&tp=sdk&source=<src>` the
-// scanner UI on the user's phone shows a less polished prompt and Lark
-// cannot attribute installs back to Multica in their analytics.
-//
-// namePreset, when non-empty, is appended as `name=<...>` to pre-fill
-// the bot/app name on Lark's "create a PersonalAgent" form. This
-// mirrors the upstream SDK's AppPreset.Name: Lark reads it from the
-// verification/QR URL (the begin POST body carries no name field) and
-// treats it as a user-editable default, not a locked final name.
-func decorateQRCodeURL(raw, source, namePreset string) (string, error) {
-	u, err := url.Parse(raw)
+// buildVerificationURL assembles the current official device-flow
+// authorization URL on the target region's open-platform host. Lark
+// deprecated the /page/launcher page the server's
+// verification_uri_complete still points at — the international cloud
+// rejects it immediately as "link expired" (code 10074) — and the
+// official larksuite/cli now builds /page/cli?user_code=…&from=cli
+// itself, which is exactly what this mirrors. The `from=cli` marker is
+// what Lark's scanner UI keys the polished CLI-style prompt on.
+func buildVerificationURL(openHost, userCode string) (string, error) {
+	u, err := url.Parse(strings.TrimRight(openHost, "/") + "/page/cli")
 	if err != nil {
 		return "", err
 	}
 	q := u.Query()
-	q.Set("from", "sdk")
-	q.Set("tp", "sdk")
-	q.Set("source", "go-sdk/"+source)
-	if namePreset != "" {
-		q.Set("name", namePreset)
-	}
+	q.Set("user_code", userCode)
+	q.Set("from", "cli")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }
