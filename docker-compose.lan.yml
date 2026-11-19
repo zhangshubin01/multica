@@ -93,6 +93,10 @@ services:
       # 不透传任何 FF_*，所以要在模板里显式接一次。plugins_v1 打开后侧边栏才出现
       # Settings → Plugins（settings-page.tsx:206），后端插件 API 也才不再 503。
       FF_PLUGINS_V1: ${FF_PLUGINS_V1:-true}
+      # docs_v1 打开后才有工作区知识库：左栏 Docs 入口、/api/docs 与
+      # /api/doc-folders、以及写进 agent brief 的 `multica doc` 命令。
+      # 默认开；要关用 `FF_DOCS_V1=false docker compose … up -d backend`。
+      FF_DOCS_V1: ${FF_DOCS_V1:-true}
     healthcheck:
       # /readyz 会检查 DB 与迁移状态（不是只回 200 的浅探针）。
       # BusyBox wget 没有 --spider，所以丢弃响应体，只看退出码。
