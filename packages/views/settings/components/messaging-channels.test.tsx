@@ -241,7 +241,7 @@ describe("agent messaging channels", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("gives an agent owner Feishu, DingTalk and WeChat, with admin-only platforms labelled", async () => {
+  it("gives an agent owner Lark, DingTalk and WeChat, with admin-only platforms labelled", async () => {
     state.role = "member";
     show(<AgentChannelsSection agent={agent} />);
     await waitFor(() =>
@@ -254,7 +254,7 @@ describe("agent messaging channels", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(
-      within(dialog).getByRole("button", { name: /^Feishu$/ }),
+      within(dialog).getByRole("button", { name: /^Lark$/ }),
     ).toBeEnabled();
     expect(
       within(dialog).getByRole("button", { name: /^DingTalk$/ }),
@@ -445,7 +445,7 @@ describe("shared connection dialog", () => {
     expect(api.cancelWeixinLogin).toHaveBeenCalledWith("ws-1", login.id);
   });
 
-  it("offers only Feishu for new connections while international Lark is disabled", async () => {
+  it("offers only Lark for new connections while mainland Feishu is disabled", async () => {
     show(
       <ChannelConnectDialog
         agents={[agent]}
@@ -455,18 +455,18 @@ describe("shared connection dialog", () => {
         onOpenChange={vi.fn()}
       />,
     );
-    const feishu = await screen.findByRole("button", { name: "Feishu" });
-    await waitFor(() => expect(feishu).toBeEnabled());
-    expect(screen.queryByRole("button", { name: "Lark" })).toBeNull();
+    const lark = await screen.findByRole("button", { name: "Lark" });
+    await waitFor(() => expect(lark).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Feishu" })).toBeNull();
     expect(
       screen.queryByRole("option", { name: "Lark (International)" }),
     ).toBeNull();
-    fireEvent.click(feishu);
+    fireEvent.click(lark);
     await waitFor(() =>
       expect(api.beginLarkInstall).toHaveBeenCalledWith(
         "ws-1",
         "agent-1",
-        "feishu",
+        "lark",
       ),
     );
   });

@@ -123,7 +123,7 @@ function ChannelConnectSteps({
               agent: agent.name,
               platform:
                 channel === "lark"
-                  ? t(($) => $.lark.region_feishu)
+                  ? t(($) => $.lark.region_lark)
                   : t(($) => $[channel].section_title),
             })
           : t(($) => $.channels.choose_description)}
@@ -190,7 +190,7 @@ function ChannelConnectSteps({
                       <IntegrationChannelIcon channel={id} />
                       <span>
                         {id === "lark"
-                          ? t(($) => $.lark.region_feishu)
+                          ? t(($) => $.lark.region_lark)
                           : t(($) => $[id].section_title)}
                       </span>{" "}
                       <span className="ml-auto text-caption text-muted-foreground">
@@ -262,9 +262,11 @@ function ChannelConnectSteps({
             <LarkChannelAuthorization
               wsId={wsId}
               agentId={agent.id}
-              // International installs remain disabled until the persistence
-              // issue is fixed; existing Lark bots stay manageable.
-              region="feishu"
+              // This team runs on Lark international only: always begin the
+              // device flow against accounts.larksuite.com. Mainland Feishu
+              // binding is not offered; existing installations stay manageable
+              // regardless of region.
+              region="lark"
               onClose={onClose}
             />
           ) : channel === "weixin" ? (
