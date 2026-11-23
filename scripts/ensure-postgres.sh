@@ -3,6 +3,13 @@ set -euo pipefail
 
 ENV_FILE="${1:-.env}"
 
+# The dev shared postgres is a *named* compose file, never the default
+# docker-compose.yml: the repo root must carry no default file, because a bare
+# `docker compose` there would adopt the self-host project (both are project
+# `multica` and mount volume `pgdata`). Always pass -f.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/../docker-compose.dev-postgres.yml"
+
 if [ ! -f "$ENV_FILE" ]; then
   echo "Missing env file: $ENV_FILE"
   echo "Create .env from .env.example, or run 'make worktree-env' and use .env.worktree."
@@ -69,19 +76,19 @@ is_local() {
 if is_local; then
   # ---------- Local: use Docker ----------
   echo "==> Ensuring shared PostgreSQL container is running on localhost:5432..."
-  docker compose up -d postgres
+  docker compose -f "$COMPOSE_FILE" up -d postgres
 
   echo "==> Waiting for PostgreSQL to be ready..."
-  until docker compose exec -T postgres pg_isready -U "$POSTGRES_USER" -d postgres > /dev/null 2>&1; do
+  until docker compose -f "$COMPOSE_FILE" exec -T postgres pg_isready -U "$POSTGRES_USER" -d postgres > /dev/null 2>&1; do
     sleep 1
   done
 
   echo "==> Ensuring database '$POSTGRES_DB' exists..."
-  db_exists="$(docker compose exec -T postgres \
+  db_exists="$(docker compose -f "$COMPOSE_FILE" exec -T postgres \
     psql -U "$POSTGRES_USER" -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'")"
 
   if [ "$db_exists" != "1" ]; then
-    docker compose exec -T postgres \
+    docker compose -f "$COMPOSE_FILE" exec -T postgres \
       psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
       -c "CREATE DATABASE \"$POSTGRES_DB\"" \
       > /dev/null

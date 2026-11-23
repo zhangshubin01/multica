@@ -37,6 +37,26 @@ MULTICA_ARGS ?= $(ARGS)
 
 COMPOSE := docker compose
 
+# Shared dev postgres (`make db-up`, `make db-down`, `make db-reset`). It is a
+# named file on purpose: with a docker-compose.yml at the repo root, a bare
+# `docker compose` picks it up and — because it shares project name `multica`
+# and volume `pgdata` with docker-compose.selfhost.yml — recreates the
+# self-host stack's postgres container from it. Always pass -f.
+DEV_COMPOSE_FILE := docker-compose.dev-postgres.yml
+
+# Compose recomputes a service from the files it is given, so the file set of a
+# lifecycle target decides what the stack ends up with. docker-compose.lan.yml
+# is the only place that defines redis + the Caddy edge, the backend
+# RATE_LIMIT_AUTH/RATE_LIMIT_INVITATION_*/FF_PLUGINS_V1/FF_COMPOSIO_MCP_APPS/
+# COMPOSIO_API_KEY passthrough, the backend /readyz healthcheck and the json-file
+# rotation; a target that omits it silently strips all of that on the next
+# recreate (and `down` leaves edge/redis behind as orphans). Keep the targets
+# that operate on this checkout's stack on the same set — `make selfhost` (the
+# official-image path) deliberately stays on the upstream file alone, so it does
+# not open the LAN edge on port 80 for a plain GHCR install.
+SELFHOST_LOCAL_FILES := -f docker-compose.selfhost.yml -f docker-compose.lan.yml
+SELFHOST_BUILD_FILES := $(SELFHOST_LOCAL_FILES) -f docker-compose.selfhost.build.yml
+
 define REQUIRE_ENV
 	@if [ ! -f "$(ENV_FILE)" ]; then \
 		echo "Missing env file: $(ENV_FILE)"; \
@@ -149,13 +169,13 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 # Internal: see selfhost-start.
 selfhost-build-start:
 	@echo "==> Building Multica from the current checkout..."
-	$(COMPOSE) -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
+	$(COMPOSE) $(SELFHOST_BUILD_FILES) up -d --build
 	@bash scripts/selfhost-wait.sh build
 
 selfhost-stop: ## Stop the self-hosted Docker Compose stack
 	$(REQUIRE_COMPOSE)
 	@echo "==> Stopping Multica services..."
-	$(COMPOSE) -f docker-compose.selfhost.yml down
+	$(COMPOSE) $(SELFHOST_LOCAL_FILES) down
 	@echo "✓ All services stopped."
 
 # ---------- Environments ----------
@@ -258,10 +278,10 @@ check: ## Run typecheck, TS tests, Go tests, and Playwright E2E for the current 
 	@ENV_FILE="$(ENV_FILE)" bash scripts/check.sh
 
 db-up: ## Start the shared PostgreSQL container used by main and worktrees
-	@$(COMPOSE) up -d postgres
+	@$(COMPOSE) -f $(DEV_COMPOSE_FILE) up -d postgres
 
 db-down: ## Stop the shared PostgreSQL container without removing its Docker volume
-	@$(COMPOSE) down
+	@$(COMPOSE) -f $(DEV_COMPOSE_FILE) down
 
 db-drop: ## Permanently drop the current env's local database after confirmation
 	$(REQUIRE_ENV)
@@ -281,7 +301,7 @@ db-reset: ## Drop and recreate the current env's database, then re-run all migra
 	esac
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	@echo "==> Dropping and recreating database '$(POSTGRES_DB)'..."
-	@$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d postgres -v ON_ERROR_STOP=1 \
+	@$(COMPOSE) -f $(DEV_COMPOSE_FILE) exec -T postgres psql -U $(POSTGRES_USER) -d postgres -v ON_ERROR_STOP=1 \
 		-c "DROP DATABASE IF EXISTS \"$(POSTGRES_DB)\" WITH (FORCE);" \
 		-c "CREATE DATABASE \"$(POSTGRES_DB)\";"
 	@echo "==> Running migrations..."

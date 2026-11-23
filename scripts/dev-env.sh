@@ -553,7 +553,7 @@ container_psql() {
   local user=$1
   shift
   command -v docker >/dev/null 2>&1 || return 1
-  docker compose -f "$REPO_ROOT/docker-compose.yml" exec -T postgres psql -U "$user" -d postgres "$@"
+  docker compose -f "$REPO_ROOT/docker-compose.dev-postgres.yml" exec -T postgres psql -U "$user" -d postgres "$@"
 }
 
 # Diagnoses the failure mode this whole script exists to make impossible:

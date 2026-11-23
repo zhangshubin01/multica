@@ -491,6 +491,7 @@ docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.y
    这个仓库里有一堆**裸 `docker compose`** 调用：`Makefile:237/240`（`db-up`/`db-down`）、`scripts/ensure-postgres.sh`、
    `scripts/drop-database.sh`。一旦设上，`make db-down` 的爆炸半径会从"只删 postgres 一个容器"扩到"删掉整个 5 容器栈"
    （dev 的 `docker-compose.yml` 与自托管栈**共用项目名 `multica`**，本来就已经相互影响，这不是把它扩大的理由）。
+   *2026-11-23 更新*：该文件已改名 `docker-compose.dev-postgres.yml`，上面三个裸调用（`Makefile` 的 `db-up`/`db-down`/`db-reset`、`scripts/ensure-postgres.sh`、`scripts/drop-database.sh`）全部改成显式 `-f`，根目录不再有默认 compose 文件。所以 `COMPOSE_FILE` 现在没东西可污染了；但"别把 compose 文件设进 `.env`"这条仍然成立——它会被今后任何不带 `-f` 的调用继承。
    ⭐ **结构性做法，留到第 9 项（新服务器）再做**：给这个栈一个**独立 compose 项目名**（实测覆盖文件可以改 `name:`）。
    届时按文档只带一个 `-f` 起的那份栈会**因端口被占用当场报错**（`Bind for 127.0.0.1:8080 failed: port is already allocated`），
    "静默降级"就变成"当场失败"。现在做要迁移卷名（`multica_pgdata` 等换前缀 = 等于换库），风险不成比例。

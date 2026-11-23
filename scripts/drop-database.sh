@@ -69,7 +69,9 @@ case "$answer" in
 esac
 
 cd "$root_dir"
-docker compose exec -T postgres \
+# -f always: the dev shared postgres is docker-compose.dev-postgres.yml, and the
+# repo root carries no default compose file on purpose (see ensure-postgres.sh).
+docker compose -f "$root_dir/docker-compose.dev-postgres.yml" exec -T postgres \
   dropdb \
   --username "$POSTGRES_USER" \
   --maintenance-db postgres \

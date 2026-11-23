@@ -417,6 +417,13 @@ files=()
 for ((i = 0; i < ${#args[@]}; i++)); do
   if [ "${args[i]}" = "-f" ]; then files+=(-f "${args[i + 1]}"); fi
 done
+# Every lifecycle target has to name the LAN override explicitly; record the
+# file set so the assertions can prove it instead of trusting the Makefile.
+# `${files[*]:-}` because bash 3.2 (the macOS system shell) treats an empty
+# array as unset under `set -u`, and `docker compose version` carries no -f.
+if [ -n "${STUB_FILES_RECORD:-}" ]; then
+  printf '%s: %s\n' "${sub}" "${files[*]:-}" >>"$STUB_FILES_RECORD"
+fi
 case "$sub" in
 version) echo "2.30.0" ;;
 up)
@@ -461,11 +468,12 @@ chmod +x "$stub_dir/docker" "$stub_dir/curl"
 # Throwaway checkout so the recipe never touches this repo's own .env.
 recipe_dir="$tmp_dir/recipe"
 mkdir -p "$recipe_dir/scripts"
-cp Makefile .env.example docker-compose.selfhost.yml docker-compose.selfhost.build.yml "$recipe_dir/"
+cp Makefile .env.example docker-compose.selfhost.yml docker-compose.selfhost.build.yml docker-compose.lan.yml "$recipe_dir/"
 cp scripts/selfhost-wait.sh "$recipe_dir/scripts/"
 
 record="$tmp_dir/published"
 curl_log="$tmp_dir/probed"
+compose_log="$tmp_dir/compose-files"
 real_docker="$(command -v docker)"
 
 # Runs `make <target>` against the stubs after applying a sed script to .env.
@@ -488,6 +496,7 @@ run_recipe() {
   fi
   : >"$record"
   : >"$curl_log"
+  : >"$compose_log"
 
   (
     cd "$recipe_dir" || exit 1
@@ -495,6 +504,7 @@ run_recipe() {
       REAL_DOCKER=\"$real_docker\" \
       STUB_PUBLISHED_RECORD=\"$record\" \
       STUB_CURL_LOG=\"$curl_log\" \
+      STUB_FILES_RECORD=\"$compose_log\" \
       $shell_env make $target $make_args"
   )
 }
@@ -505,6 +515,22 @@ published_port() {
 
 probed_port() {
   sed -n '1s#http://localhost:\([0-9]*\)/health#\1#p' "$curl_log"
+}
+
+# docker-compose.lan.yml is the only place redis, the Caddy edge, the backend
+# RATE_LIMIT/FF_*/COMPOSIO passthrough, the /readyz healthcheck and the json-file
+# rotation exist. A lifecycle target that drops it strips all of that silently on
+# the next recreate (`down` also leaves edge/redis behind as orphans), so assert
+# the file set the recipe actually handed to Compose.
+require_compose_files() {
+  local label=$1 expected=$2
+
+  if ! grep -Fq -- "-f $expected" "$compose_log"; then
+    echo "[$label] compose was invoked without -f $expected" >&2
+    echo "Observed file sets:" >&2
+    cat "$compose_log" >&2
+    exit 1
+  fi
 }
 
 require_consistent() {
@@ -558,6 +584,11 @@ fi
 # selfhost-build resolves the port the same way.
 run_recipe selfhost-build 's/^PORT=8080/PORT=9400/' '' '' >/dev/null
 require_consistent 'selfhost-build with PORT edited' 9400
+require_compose_files 'selfhost-build' docker-compose.lan.yml
+
+# Lifecycle targets must keep the LAN override, including the stop path.
+run_recipe selfhost-stop '' '' '' >/dev/null
+require_compose_files 'selfhost-stop' docker-compose.lan.yml
 
 # The Makefile derives LOCAL_UPLOAD_BASE_URL for local dev. Compose passes it to
 # the backend, so the self-host recipes must leave it unset unless .env sets it:

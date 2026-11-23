@@ -541,7 +541,7 @@ If you prefer to build and run services manually:
 **Prerequisites:** Go 1.26.9, Node.js 22, pnpm 10.28.2, PostgreSQL 17 — a stock install is enough, see [Database Setup](#database-setup).
 
 ```bash
-# Start your PostgreSQL (or use: docker compose up -d postgres)
+# Start your PostgreSQL (or use: docker compose -f docker-compose.dev-postgres.yml up -d postgres)
 
 # Build the backend
 make build
