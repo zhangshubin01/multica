@@ -192,6 +192,15 @@ while IFS= read -r line; do
       fi
       ;;
   esac
+  # A marker may also sit *inside* a composed value — the template carries
+  # `CORS_ALLOWED_ORIGINS=@URL@,http://localhost:3100,…` so several origins can
+  # share one line. Substitute the host-derived markers in place; @SECRET: and
+  # @DBURL@ stay whole-value only, so an embedded secret can never slip into a
+  # value nobody marked. Without this, that line keeps its literal @URL@ and the
+  # "unresolved markers" guard below aborts every render.
+  value="${value//@URL@/$APP_URL}"
+  value="${value//@WS@/$WS_URL}"
+  value="${value//@CIDR@/$CIDR}"
   case "$key" in
     POSTGRES_USER) [ -n "$value" ] && PG_USER="$value" ;;
     POSTGRES_DB)   [ -n "$value" ] && PG_DB="$value" ;;

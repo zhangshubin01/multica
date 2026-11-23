@@ -8,7 +8,7 @@
 |---|---|
 | `docker-compose.lan.yml` | 本地覆盖层：redis 发布、限流（auth/invite）、功能开关（`FF_PLUGINS_V1` / `FF_DOCS_V1` 默认开）、edge 与 backend 健康检查、端口绑定 |
 | `docker-compose.selfhost.build.yml` | 从源码构建，镜像固定为 `multica-backend:dev` / `multica-web:dev` |
-| `deploy/prod/env.template` | 栈会读取的**全部** 102 个键。密钥位是 `@SECRET:NAME@`，主机相关值是 `@URL@` / `@WS@` / `@CIDR@`，`DATABASE_URL` 由 `POSTGRES_*` 现场拼 |
+| `deploy/prod/env.template` | 栈会读取的**全部** 107 个键。密钥位是 `@SECRET:NAME@`，主机相关值是 `@URL@` / `@WS@` / `@CIDR@`（可嵌在组合值里，如 `@URL@,http://localhost:3100`），`DATABASE_URL` 由 `POSTGRES_*` 现场拼 |
 | `deploy/prod/bootstrap.sh` | 渲染 `.env` → 构建 → 起栈 → 自检；带 `--dry-run` / `--render-only` / `--extract-secrets` |
 
 密钥值不在仓库里，也永远不应进去：这个 fork 是公开仓库。
@@ -19,7 +19,7 @@
 
 ```bash
 ./deploy/prod/bootstrap.sh --extract-secrets
-# → ~/.multica-secrets/secrets.env   24 个键，mode 600，仓库外
+# → ~/.multica-secrets/secrets.env   25 个键，mode 600，仓库外
 ```
 
 只导出确实有值的键；源码主机上本来就空着的集成（Resend、Google、AWS/CloudFront、DingTalk、Slack、企微、Telegram、GitHub App 私钥等）会以 `NAME=` 空值写入并带一行注释说明。空值是有意义的取值——表示那套集成不启用。
