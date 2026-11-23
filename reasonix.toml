@@ -1,0 +1,5 @@
+[permissions]
+allow = ["Bash=for d in apps/* packages/*; do echo \"== $d\"; ls \"$d\" | head -12; done 2>/dev/null; echo \"=== 代码量统计 ===\"; find apps packages server -type f \\( -name '*.go' -o -name '*.ts' -o -name '*.tsx' \\) 2>/dev/null | awk -F. '{print $NF}' | sort | uniq -c"]
+
+[sandbox]
+allow_write = ["${HOME}/.multica", "${HOME}/multica_workspaces"]
