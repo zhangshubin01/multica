@@ -19,7 +19,7 @@
 
 ```bash
 ./deploy/prod/bootstrap.sh --extract-secrets
-# → ~/.multica-secrets/secrets.env   22 个键，mode 600，仓库外
+# → ~/.multica-secrets/secrets.env   24 个键，mode 600，仓库外
 ```
 
 只导出确实有值的键；源码主机上本来就空着的集成（Resend、Google、AWS/CloudFront、DingTalk、Slack、企微、Telegram、GitHub App 私钥等）会以 `NAME=` 空值写入并带一行注释说明。空值是有意义的取值——表示那套集成不启用。
@@ -37,7 +37,7 @@ git clone -b Gif_android <repo> ~/multica && cd ~/multica
 ./deploy/prod/bootstrap.sh
 ```
 
-它会：探测本机 LAN 地址 → 按该地址填 `MULTICA_APP_URL` / `MULTICA_PUBLIC_URL` / `FRONTEND_ORIGIN` / `CORS_ALLOWED_ORIGINS` / `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` / `MULTICA_DAEMON_SERVER_URL` / `*_REDIRECT_URI` / `*_CALLBACK_BASE_URL`、`MULTICA_TRUSTED_PROXIES`、`RATE_LIMIT_TRUSTED_PROXIES`（新网段 `/24`）→ 用密钥文件填 22 个密钥位 → 写 `.env`（600，已有则先备份，需 `--force`）→ `docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f docker-compose.lan.yml up -d --build` → 等 `/healthz` → 打印迁移版本、开关、前端与 edge 探针。
+它会：探测本机 LAN 地址 → 按该地址填 `MULTICA_APP_URL` / `MULTICA_PUBLIC_URL` / `FRONTEND_ORIGIN` / `CORS_ALLOWED_ORIGINS` / `NEXT_PUBLIC_API_URL` / `NEXT_PUBLIC_WS_URL` / `MULTICA_DAEMON_SERVER_URL` / `*_REDIRECT_URI` / `*_CALLBACK_BASE_URL`、`MULTICA_TRUSTED_PROXIES`、`RATE_LIMIT_TRUSTED_PROXIES`（新网段 `/24`）→ 用密钥文件填 24 个密钥位 → 写 `.env`（600，已有则先备份，需 `--force`）→ `docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f docker-compose.lan.yml up -d --build` → 等 `/healthz` → 打印迁移版本、开关、前端与 edge 探针。
 
 其它用法：
 
