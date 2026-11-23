@@ -97,6 +97,12 @@ services:
       # /api/doc-folders、以及写进 agent brief 的 `multica doc` 命令。
       # 默认开；要关用 `FF_DOCS_V1=false docker compose … up -d backend`。
       FF_DOCS_V1: ${FF_DOCS_V1:-true}
+      # composio_mcp_apps 打开后才有 Settings → Composio 连接与 Agent → Apps 标签，
+      # 以及 agent 的 Private / Public-to 访问选择器（MUL-3963，与 Composio 同开关）。
+      # 后端还要 COMPOSIO_API_KEY（项目级密钥，只在 .env / 密钥目录，不进仓库）才能
+      # 初始化 SDK；无 key 时 flag 开着也报 integration disabled。
+      FF_COMPOSIO_MCP_APPS: ${FF_COMPOSIO_MCP_APPS:-true}
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:-}
     healthcheck:
       # /readyz 会检查 DB 与迁移状态（不是只回 200 的浅探针）。
       # BusyBox wget 没有 --spider，所以丢弃响应体，只看退出码。
