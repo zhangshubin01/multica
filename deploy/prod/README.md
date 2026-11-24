@@ -48,6 +48,21 @@ git clone -b Gif_android <repo> ~/multica && cd ~/multica
 ./deploy/prod/bootstrap.sh --allow-missing-secrets   # 全新空装：缺的密钥留空，POSTGRES_PASSWORD/JWT_SECRET 现场生成
 ```
 
+## 多套环境：生产与测试的口径
+
+模板给的是**新主机默认值**：入口 `:80`（由 `docker-compose.lan.yml` 的 `edge` 提供）、`FRONTEND_PORT=3100`。现役生产主机有一层刻意的覆盖，两边不要互相纠偏：
+
+| 项 | 生产（现役主机） | 测试 / 新主机 |
+|---|---|---|
+| 入口 | `http://<host>:8090`（宿主 Caddy → `127.0.0.1:3000`），`:80` 的 edge 作为第二条等价入口 | `http://<test-ip>`（`:80`，edge） |
+| `FRONTEND_PORT` | `3000` | `3100`（模板默认） |
+| 渲染方式 | 手工维护的 `.env`（历史较久，含 SMTP/Lark 等实际值） | `./deploy/prod/bootstrap.sh --host <test-ip>` |
+
+- **生产为什么不跟模板迁到 `:80`**：四个对外 URL 已被 GitLab webhook（`gitlab-hooks-sync.mjs` 跟随 `MULTICA_PUBLIC_URL`）、各机器的 daemon `app_url`、书签钉住；`MULTICA_PLUGIN_SURFACE_ORIGIN` 又是独立 host + `:8090`。切一次 URL 的收益只是“数字与模板一致”，成本是全链路改址。edge 走 compose 服务名（`frontend:3000` / `backend:8080`），所以 `FRONTEND_PORT` 是 3000 还是 3100 不影响 `:80` 入口。
+- **插件表面要单独填**：`MULTICA_PLUGIN_SURFACE_ORIGIN` 留空 = 表面关闭（插件能装，页面打不开）。它必须是**与 app/API 不同的 host**，并另起一个反代站点把该 host 转给 `backend:8080`。
+- **两套栈同机时要先改端口**：`edge` 现在写死 `80:80`，同机起第二套要参数化成 `${EDGE_PORT:-80}:80`，并用 `-p multica-test` 隔离 compose 项目与卷。
+- 真要统一到 `:80` 的一次性清单：`.env` 四个 URL 去掉 `:8090` → 重建 backend（环境变量只在创建时读）→ GitLab hook 5 分钟内自动跟随 → 宿主 Caddy 的 `:8090` 改成 302 到 `:80`（插件表面那个站点原地保留，靠 Host 区分）→ 通知各人改书签与 `multica config` 的 app_url。回滚 = 还原 `.env` 备份并重建 backend。
+
 ## 必须人工处理的三件事（无法随仓库走）
 
 1. **密钥文件**——`secrets.env` 只能线下传递（scp / AirDrop / 1Password）。
