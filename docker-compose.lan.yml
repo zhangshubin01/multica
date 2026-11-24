@@ -111,6 +111,10 @@ services:
       RATE_LIMIT_TRUSTED_PROXIES: ${RATE_LIMIT_TRUSTED_PROXIES:-192.168.148.0/24}
       RATE_LIMIT_AUTH: ${RATE_LIMIT_AUTH:-30}
       RATE_LIMIT_AUTH_VERIFY: ${RATE_LIMIT_AUTH_VERIFY:-120}
+      # 日志级别：上游三个 compose 都不透传 LOG_LEVEL（server/internal/logger 未设置时默认
+      # debug），生产里 daemon 心跳会把日志刷到约 300+ 行/分。取值由 .env 决定，留空＝沿用
+      # 上游默认（debug）；排查企微/飞书逐帧问题时临时改成 debug 即可。
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # 邀请限流（三道闸：actor 每邀请人 / workspace 每工作区 / recipient 每收件邮箱）。
       # 上游 `docker-compose.selfhost.yml` 漏了这三个变量（.env.example 里有文档、模板里没有），
       # 所以默认哪怕写进 .env 也进不了容器 —— 这里补上透传，取值由 .env 决定，
