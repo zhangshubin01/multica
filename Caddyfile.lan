@@ -1,9 +1,11 @@
 # 内网试跑用的 Caddy 前端：80 端口，纯 HTTP（局域网内够用，无 TLS）。
 #
-# 只有三件事：
-#   1. /ws 与 /ws/* 直接交给后端 8080（Next.js 的 rewrite 不能转发 WebSocket 的
-#      Upgrade 握手，所以必须在反代这一层拦下来），并关闭缓冲，否则实时更新会"卡住"。
-#   2. /auth 与 /auth/* 直接交给后端 8080（P0-4）：登录不再挤前端容器、少一跳。
+# 只有两件事：
+#   1. 直连后端的路径（见下方 @backend）：/ws、/ws/*（Next.js 的 rewrite 不能转发
+#      WebSocket 的 Upgrade 握手，所以必须在反代这一层拦下来，并关闭缓冲，否则实时
+#      更新会"卡住"）、/auth、/auth/*（P0-4：登录不再挤前端容器、少一跳）、以及
+#      /health、/healthz（前端只代理 /api 与 /ws，其余会 404，而
+#      `multica setup self-host` 探测 <server-url>/health 要求 200）。
 #      注意：OrbStack 的宿主端口发布会抹掉客户端源地址（容器看到的源恒为 VM 网关），
 #      所以 Caddy 的 X-Forwarded-For 恒为网关、RATE_LIMIT_TRUSTED_PROXIES 无法按
 #      真实 IP 计数，限流仍是"全团队一桶"（阈值维持 30/120）；迁移 Linux 主机后
@@ -11,23 +13,30 @@
 #      host 网络 + orb 端口转发（未实施）。
 #      另一注意：前端页面 /auth/callback（Google OAuth 回调）也会被劫到后端，
 #      启用 Google OAuth 前需要把该路径排除。
-#   3. 其余请求（含 /api、/v1、/uploads、/health）交给前端 3100，前端自己会代理到后端。
+#   2. 其余请求（含 /api、/v1、/uploads 与页面）交给前端，前端自己再代理到后端。
 #
-# 容器里访问宿主用 host.docker.internal（OrbStack 提供，已验证可解析到宿主）。
+# 上游一律用 compose 服务名（backend:8080 / frontend:3000），不走宿主的
+# host.docker.internal：edge 与后端/前端同在 multica_default 网络里，服务名直连少两跳、
+# 少两个失败面，也不再依赖宿主的 FRONTEND_PORT（本机 3000、模板 3100）；Linux 主机上
+# host.docker.internal 默认不解析，搬机器会直接断（与 docker-compose.lan.yml 里
+# redis 那条同样的理由）。容器内前端恒监听 3000，与宿主的 FRONTEND_PORT 无关。
+#
 # 改完这个文件后热加载：docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml -f docker-compose.lan.yml exec edge caddy reload --config /etc/caddy/Caddyfile
 
 :80 {
-	@ws path /ws /ws/*
-	handle @ws {
-		reverse_proxy host.docker.internal:8080 {
+	# WebSocket 握手 + 登录 + 健康检查：直连后端，不经前端。
+	# 后端的登录接口在根路径 /auth/*（server/cmd/server/router.go:1700-1703），
+	# 但 /auth/callback 是**前端页面**（apps/web/app/auth/callback，Google OAuth 回调），
+	# 必须放回前端，否则启用 Google 登录后那个页面在 :80 上是 404。
+	@backend {
+		path /ws /ws/* /auth /auth/* /health /healthz
+		not path /auth/callback
+	}
+	handle @backend {
+		reverse_proxy backend:8080 {
 			flush_interval -1
 		}
 	}
 
-	@auth path /auth /auth/*
-	handle @auth {
-		reverse_proxy host.docker.internal:8080
-	}
-
-	reverse_proxy host.docker.internal:3100
+	reverse_proxy frontend:3000
 }
