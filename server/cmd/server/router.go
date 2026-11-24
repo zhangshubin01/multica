@@ -57,6 +57,7 @@ import (
 	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/llm"
 	publicapiv1 "github.com/multica-ai/multica/server/pkg/publicapi/v1"
+	"github.com/multica-ai/multica/server/pkg/remotemcp"
 )
 
 var defaultOrigins = []string{
@@ -485,6 +486,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	h.Metrics = opts.BusinessMetrics
 	h.InboxReads.Metrics = opts.InboxReadMetrics
 	h.FeatureFlags = opts.FeatureFlags
+	// A deployment behind a fake-IP proxy resolves every name into the proxy's
+	// synthetic range, which the Remote MCP endpoint guard reads as "not the
+	// public internet". MULTICA_REMOTE_MCP_ALLOW_CIDRS names that range; empty
+	// keeps the default strict behaviour.
+	if err := remotemcp.SetAllowCIDRs(os.Getenv("MULTICA_REMOTE_MCP_ALLOW_CIDRS")); err != nil {
+		slog.Error("remote mcp endpoint allowlist ignored", "error", err)
+	} else if allowed := remotemcp.AllowedCIDRs(); len(allowed) > 0 {
+		slog.Warn("remote mcp endpoint guard allows non-public ranges", "cidrs", fmt.Sprint(allowed))
+	}
 	collabClient, err := collab.NewClient(os.Getenv("COLLAB_INTERNAL_URL"), os.Getenv("COLLAB_SECRET"))
 	if err != nil {
 		slog.Error("live doc editing disabled", "error", err)

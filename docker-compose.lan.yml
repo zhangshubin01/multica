@@ -142,6 +142,11 @@ services:
       # FF_COMPOSIO_MCP_APPS 与 COMPOSIO_API_KEY 都配好了（server/cmd/server/router.go:1431）。
       # 与 Composio 成对使用；只在 .env / 密钥目录，不进仓库。
       MULTICA_APPS_SECRET_KEY: ${MULTICA_APPS_SECRET_KEY:-}
+      # Remote MCP / Connected Apps 的端点守卫要求解析结果是公网地址。本机容器出网走
+      # Clash 的 fake-IP，任何域名都解析成 198.18.0.0/15（v6 为 2001:2::/48），守卫会把
+      # 它们判成"非公网"，于是 App 的 OAuth 发现直接 502（failed to start connect）。
+      # 把代理的合成网段声明进来即可；留空＝保持上游严格模式。
+      MULTICA_REMOTE_MCP_ALLOW_CIDRS: ${MULTICA_REMOTE_MCP_ALLOW_CIDRS:-}
     healthcheck:
       # /readyz 会检查 DB 与迁移状态（不是只回 200 的浅探针）。
       # BusyBox wget 没有 --spider，所以丢弃响应体，只看退出码。

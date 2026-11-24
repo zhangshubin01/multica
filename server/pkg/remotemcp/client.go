@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/multica-ai/multica/server/pkg/httptransport"
@@ -64,7 +65,8 @@ func ValidatePublicHTTPSEndpoint(ctx context.Context, raw string, allowedHosts [
 		return nil, fmt.Errorf("resolve endpoint host: %w", err)
 	}
 	for _, address := range addresses {
-		if !isPublicAddress(address.Unmap()) {
+		address = address.Unmap()
+		if !isPublicAddress(address) && !allowlistedAddress(address) {
 			return nil, fmt.Errorf("endpoint host resolves to non-public address %s", address)
 		}
 	}
@@ -111,6 +113,51 @@ func isPublicAddress(address netip.Addr) bool {
 		}
 	}
 	return address.IsGlobalUnicast()
+}
+
+// allowCIDRs is the operator-declared exception list for a deployment whose
+// egress sits behind a fake-IP proxy (Clash, Surge and friends): every name
+// then resolves into the proxy's synthetic range, and the proxy dials the real
+// host. Empty unless MULTICA_REMOTE_MCP_ALLOW_CIDRS names a range, so the
+// default stays "public internet only".
+var allowCIDRs atomic.Pointer[[]netip.Prefix]
+
+// SetAllowCIDRs parses a comma-separated CIDR list. An unparseable entry is an
+// error and leaves the previous list in place: a typo must not silently widen
+// or narrow the guard.
+func SetAllowCIDRs(raw string) error {
+	parsed := []netip.Prefix{}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		prefix, err := netip.ParsePrefix(entry)
+		if err != nil {
+			return fmt.Errorf("invalid CIDR %q: %w", entry, err)
+		}
+		parsed = append(parsed, prefix.Masked())
+	}
+	allowCIDRs.Store(&parsed)
+	return nil
+}
+
+// AllowedCIDRs returns the ranges currently exempted from the public-address
+// requirement, for logging at boot.
+func AllowedCIDRs() []netip.Prefix {
+	if list := allowCIDRs.Load(); list != nil {
+		return *list
+	}
+	return nil
+}
+
+func allowlistedAddress(address netip.Addr) bool {
+	for _, prefix := range AllowedCIDRs() {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func NewSecureHTTPClient(endpoint *url.URL) *http.Client {

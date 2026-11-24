@@ -270,3 +270,32 @@ func TestReadSSEResponseReportsMissingMatchingResponse(t *testing.T) {
 		t.Fatalf("readSSEResponse error = %v, want no matching response", err)
 	}
 }
+
+// A fake-IP proxy makes every name resolve into a synthetic range; the operator
+// can name that range so discovery works, and the default stays strict.
+func TestValidatePublicHTTPSEndpointAllowCIDRs(t *testing.T) {
+	t.Cleanup(func() { _ = SetAllowCIDRs("") })
+	resolver := staticResolver{
+		"mcp.example.com": {netip.MustParseAddr("198.18.0.182")},
+	}
+	endpoint := "https://mcp.example.com/mcp"
+	if _, err := ValidatePublicHTTPSEndpoint(context.Background(), endpoint, nil, resolver); err == nil {
+		t.Fatal("synthetic address was accepted before the operator named the range")
+	}
+	if err := SetAllowCIDRs("198.18.0.0/15, 2001:2::/48"); err != nil {
+		t.Fatalf("SetAllowCIDRs: %v", err)
+	}
+	if _, err := ValidatePublicHTTPSEndpoint(context.Background(), endpoint, nil, resolver); err != nil {
+		t.Fatalf("allowlisted endpoint rejected: %v", err)
+	}
+	// A range outside the list is still refused.
+	if err := SetAllowCIDRs("2001:2::/48"); err != nil {
+		t.Fatalf("SetAllowCIDRs: %v", err)
+	}
+	if _, err := ValidatePublicHTTPSEndpoint(context.Background(), endpoint, nil, resolver); err == nil {
+		t.Fatal("address outside the allowlist was accepted")
+	}
+	if err := SetAllowCIDRs("not-a-cidr"); err == nil {
+		t.Fatal("unparseable CIDR was accepted")
+	}
+}
