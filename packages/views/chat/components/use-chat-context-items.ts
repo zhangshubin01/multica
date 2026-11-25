@@ -1,8 +1,9 @@
 "use client";
 
 import { issueStatusCategory } from "@multica/core/issues";
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { ApiError } from "@multica/core/api";
 import { selectRecentContexts, useRecentContextStore, type RecentContextEntry } from "@multica/core/chat";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
@@ -107,6 +108,22 @@ export function useChatContextItems(wsId: string): MentionItem[] {
       staleTime: 30_000,
     })),
   });
+
+  // A recent entry whose detail read answers 404 is a pointer to something that
+  // was deleted while this client was not listening — the store's own
+  // `forgetContext` only runs on a delete this client observed. Left in place,
+  // every mount of the composer refires the same miss (three deleted issues
+  // meant three 404s per app load), so drop it once the server says it is gone.
+  useEffect(() => {
+    const { forgetContext } = useRecentContextStore.getState();
+    recentQueries.forEach((query, index) => {
+      const entry = visibleRecentEntries[index];
+      if (!entry) return;
+      if (query.error instanceof ApiError && query.error.status === 404) {
+        forgetContext(wsId, { type: entry.type, id: entry.id });
+      }
+    });
+  }, [recentQueries, visibleRecentEntries, wsId]);
 
   return useMemo(() => {
     const currentItems: MentionItem[] = [];
